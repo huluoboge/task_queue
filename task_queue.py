@@ -170,8 +170,3 @@ def chain(stage_a, stage_b):
     stage_a.next = stage_b
     return stage_b
 
-# def chain(stage_a, stage_b, func):
-#     def wrapped(item):
-#         result = func(item)
-#         stage_b.push(result)
-#     stage_a.func = wrapped

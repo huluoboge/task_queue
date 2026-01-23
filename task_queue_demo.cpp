@@ -61,10 +61,27 @@ int main2()
     stageA.setTaskCount(N);
     stageB.setTaskCount(N);
     stageC.setTaskCount(N);
-    for (int i = 0; i < N; ++i) {
-        stageA.push(i);
+
+    // 在另一个线程中push任务，主线程可以继续做其他事情
+    std::future<void> future = std::async(std::launch::async, [&]() {
+        for (int i = 0; i < N; ++i) {
+            stageA.push(i);
+        }
+    });
+
+    // 主线程可以同时做其他工作
+    printf("主线程可以同时处理其他任务...\n");
+    for (int i = 0; i < 5; ++i) {
+        printf("主线程正在处理其他工作 %d/5\n", i + 1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
+    printf("主线程完成其他工作\n");
+
+    // 等待流水线处理完成
+    printf("等待流水线处理完成...\n");
     stageC.wait();
+    printf("所有任务处理完成\n");
+
     return 0;
 }
 
