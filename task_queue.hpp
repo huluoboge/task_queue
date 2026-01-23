@@ -255,7 +255,7 @@ public:
     using CurrentThreadPtr = std::shared_ptr<CurrentThread<TaskQueueT>>;
 
     TaskQueueT taskQueue;
-    CurrentThreadEx()
+    CurrentThreadEx(int) // 为了保证调用方式和ThreadPoolEx一致，这里并没有意义
     {
         currentThread = std::make_shared<CurrentThread<TaskQueueT>>(taskQueue, taskCounter, doneCV, doneMtx);
     }
@@ -270,7 +270,8 @@ public:
         taskQueue.pushTask(task);
     }
 
-    void run(){
+    void run()
+    {
         currentThread->run();
     }
 
@@ -281,38 +282,60 @@ private:
     std::mutex doneMtx;
 };
 
+// 基类，用于StageT链接
+class StageBase {
+public:
+    virtual ~StageBase() = default;
+    virtual void push(int index) = 0;
+};
 
-class Stage {
+// 泛型Stage类，支持不同的执行器类型
+template <typename ExecutorT>
+class StageT : public StageBase {
 public:
     using Func = std::function<void(int)>;
 
-    Stage(const std::string& name,
-          int num_workers,
-          int capacity,
-          Func func)
-        : name_(name),
-          pool_(num_workers),
-          func_(std::move(func))
+    // 构造函数 - 对于ThreadPoolEx需要num_workers，对于CurrentThreadEx不需要
+    StageT(const std::string& name, int threads, int capacity, Func func)
+        : name_(name)
+        , executor_(threads)
+        , func_(std::move(func))
     {
-        pool_.taskQueue.setCapacity(capacity);
+        executor_.taskQueue.setCapacity(capacity);
     }
 
-    void setTaskCount(int n) {
-        pool_.setTaskCount(n);
+    void setTaskCount(int n)
+    {
+        executor_.setTaskCount(n);
     }
 
-    void push(int index) {
-        pool_.pushTask([this, index]() {
+    void push(int index) override
+    {
+        executor_.pushTask([this, index]() {
             run(index);
         });
     }
 
-    void wait() {
-        pool_.wait();
+    void wait()
+    {
+        executor_.wait();
+    }
+
+    // 对于CurrentThreadEx，需要手动调用run
+    void run()
+    {
+        executor_.run();
+    }
+
+    // 公共方法用于链接
+    void setNext(StageBase* next)
+    {
+        next_ = next;
     }
 
 private:
-    void run(int index) {
+    void run(int index)
+    {
         func_(index);
         if (next_) {
             next_->push(index);
@@ -321,13 +344,21 @@ private:
 
 private:
     std::string name_;
-    ThreadPoolEx<BoundedTaskQueue> pool_;
+    ExecutorT executor_;
     Func func_;
-    Stage* next_ = nullptr;
+    StageBase* next_ = nullptr;
 
-    friend void chain(Stage&, Stage&);
+    // 为了让所有StageT实例都可以访问next_
+    template <typename AnyExecutorT>
+    friend class StageT;
 };
 
-inline void chain(Stage& a, Stage& b) {
-    a.next_ = &b;
+using Stage = StageT<ThreadPoolEx<BoundedTaskQueue>>;
+using StageCurrent = StageT<CurrentThreadEx<BoundedTaskQueue>>;
+
+// 通用的chain函数，支持不同类型的StageT
+template <typename Stage1, typename Stage2>
+void chain(Stage1& a, Stage2& b)
+{
+    a.setNext(&b);
 }
