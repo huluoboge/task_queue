@@ -23,7 +23,8 @@ TaskQueue是一个高效的多语言并发任务队列系统，支持C++和Pytho
 - **TaskQueue**: 基本无界任务队列
 - **BoundedTaskQueue**: 有界任务队列，支持容量限制
 - **ThreadPool**: 多线程任务执行器
-- **Stage**: 流水线处理阶段
+- **Stage**: 流水线处理阶段（多线程执行）
+- **StageCurrent**: 在当前线程执行的流水线阶段（适用于CUDA/GUI等场景）
 - **chain()**: 阶段链接函数
 
 ### 架构图
@@ -120,6 +121,57 @@ for (int i = 0; i < 100; ++i) {
 stageC.wait();
 ```
 
+### 混合流水线示例（多线程 + 当前线程）
+
+**C++版本**:
+```cpp
+// CPU处理阶段（多线程）
+Stage processStage("Process", 2, 4, [&](int i) {
+    data[i] += 10;
+});
+
+// GPU/渲染阶段（当前线程 - CUDA上下文绑定）
+StageCurrent renderStage("Render", 1, 8, [&](int i) {
+    printf("GPU渲染: %d -> %d\n", i, data[i] * 100);
+});
+
+chain(processStage, renderStage);
+
+// 在后台线程push任务
+std::thread producer([&]() {
+    for (int i = 0; i < N; ++i) {
+        processStage.push(i);
+    }
+});
+
+// 在主线程运行渲染阶段
+renderStage.run();  // 阻塞直到完成
+producer.join();
+```
+
+**Python版本**:
+```python
+import task_queue as tq
+
+# CPU处理阶段（多线程）
+process_stage = tq.Stage("Process", 2, 4, lambda i: data.__setitem__(i, data[i] + 10))
+
+# GPU/渲染阶段（当前线程）
+render_stage = tq.StageCurrent("Render", 1, 8, lambda i: print(f"GPU渲染: {i} -> {data[i] * 100}"))
+
+tq.chain(process_stage, render_stage)
+
+# 在后台线程push任务
+def producer():
+    for i in range(N):
+        process_stage.push(i)
+
+threading.Thread(target=producer).start()
+
+# 在主线程运行渲染阶段
+render_stage.run()  # 阻塞直到完成
+```
+
 ## API 文档
 
 ### TaskQueue
@@ -171,6 +223,24 @@ public:
 };
 ```
 
+### StageCurrent
+
+```cpp
+class StageCurrent {
+public:
+    StageCurrent(const std::string& name, int dummy_param, int capacity,
+                 std::function<void(int)> func);  // 构造函数
+    void setTaskCount(int n);                     // 设置任务总数
+    void push(int index);                         // 推送索引到流水线
+    void run();                                   // 在当前线程运行任务
+};
+```
+
+**使用场景**:
+- **CUDA程序**: CUDA上下文通常绑定到特定线程
+- **GUI应用**: Tkinter/PyQt等要求UI更新在主线程
+- **线程局部存储**: 需要特定线程上下文的操作
+
 ### chain 函数
 
 ```cpp
@@ -218,14 +288,15 @@ Stage stage("MemorySaver", 2, 4, processFunc);
 
 ```
 task_queue/
-├── task_queue.hpp          # C++头文件
-├── task_queue.py           # Python实现
-├── task_queue_demo.cpp     # C++演示程序
-├── task_queue_demo.py      # Python演示程序
-├── compile_and_run.bash    # 编译运行脚本
-├── CMakeLists.txt          # CMake构建配置
-├── README.md              # 项目文档
-└── .gitignore             # Git忽略文件
+├── task_queue.hpp              # C++头文件
+├── task_queue.py               # Python实现
+├── task_queue_demo.cpp         # C++演示程序
+├── task_queue_demo.py          # Python演示程序
+├── task_queue_demo_current.py  # Python StageCurrent演示
+├── compile_and_run.bash        # 编译运行脚本
+├── CMakeLists.txt              # CMake构建配置
+├── README.md                   # 项目文档
+└── .gitignore                  # Git忽略文件
 ```
 
 ## 测试
@@ -233,10 +304,14 @@ task_queue/
 运行完整测试套件：
 
 ```bash
+# 运行C++和Python基本演示
 ./compile_and_run.bash
+
+# 运行Python StageCurrent演示
+python3 task_queue_demo_current.py
 ```
 
-这将测试C++和Python实现的正确性。
+这将测试C++和Python实现的正确性，包括混合流水线（多线程 + 当前线程）。
 
 ## 许可证
 
